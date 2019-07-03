@@ -1,17 +1,33 @@
 ####-*.patch
-gui/icons_rc.py
-lib/icons_rc.py
 *.pyc
 *.swp
 build/
 dist/
 *.egg/
-/electrum.py
-contrib/pyinstaller/
 Electrum_LTC.egg-info/
-gui/qt/icons_rc.py
-locale/
+electrum_ltc/locale/
 .devlocaltmp/
 *_trial_temp
 packages
 env/
+.buildozer/
+bin/
+/app.fil
+.idea
+
+# icons
+electrum_ltc/gui/kivy/theming/light-0.png
+electrum_ltc/gui/kivy/theming/light.atlas
+
+# tests/tox
+.tox/
+.cache/
+.coverage
+.pytest_cache
+
+# build workspaces
+contrib/build-wine/tmp/
+contrib/build-wine/fresh_clone/
+contrib/build-linux/appimage/build/
+contrib/build-linux/appimage/.cache/
+contrib/android_debug.keystore
