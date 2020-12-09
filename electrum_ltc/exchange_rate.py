@@ -11,7 +11,9 @@ from decimal import Decimal
 from typing import Sequence, Optional
 
 from aiorpcx.curio import timeout_after, TaskTimeout, TaskGroup
+import aiohttp
 
+from . import util
 from .bitcoin import COIN
 from .i18n import _
 from .util import (ThreadJob, make_dir, log_exceptions,
@@ -78,8 +80,14 @@ class ExchangeBase(Logger):
             self.logger.info(f"getting fx quotes for {ccy}")
             self.quotes = await self.get_rates(ccy)
             self.logger.info("received fx quotes")
-        except BaseException as e:
+        except asyncio.CancelledError:
+            # CancelledError must be passed-through for cancellation to work
+            raise
+        except aiohttp.ClientError as e:
             self.logger.info(f"failed fx quotes: {repr(e)}")
+            self.quotes = {}
+        except Exception as e:
+            self.logger.exception(f"failed fx quotes: {repr(e)}")
             self.quotes = {}
         self.on_quotes()
 
@@ -106,8 +114,11 @@ class ExchangeBase(Logger):
             self.logger.info(f"requesting fx history for {ccy}")
             h = await self.request_history(ccy)
             self.logger.info(f"received fx history for {ccy}")
-        except BaseException as e:
+        except aiohttp.ClientError as e:
             self.logger.info(f"failed fx history: {repr(e)}")
+            return
+        except Exception as e:
+            self.logger.exception(f"failed fx history: {repr(e)}")
             return
         filename = os.path.join(cache_dir, self.name() + '_' + ccy)
         with open(filename, 'w', encoding='utf-8') as f:
@@ -325,6 +336,13 @@ class QuadrigaCX(ExchangeBase):
         return {'CAD': Decimal(json['last'])}
 
 
+class Bitragem(ExchangeBase):
+
+    async def get_rates(self,ccy):
+        json = await self.get_json('api.bitragem.com', '/v1/index?asset=LTC&market=BRL')
+        return {'BRL': Decimal(json['response']['index'])}
+
+
 def dictinvert(d):
     inv = {}
     for k, vlist in d.items():
@@ -389,12 +407,11 @@ def get_exchanges_by_ccy(history=True):
 
 class FxThread(ThreadJob):
 
-    def __init__(self, config: SimpleConfig, network: Network):
+    def __init__(self, config: SimpleConfig, network: Optional[Network]):
         ThreadJob.__init__(self)
         self.config = config
         self.network = network
-        if self.network:
-            self.network.register_callback(self.set_proxy, ['proxy_set'])
+        util.register_callback(self.set_proxy, ['proxy_set'])
         self.ccy = self.get_currency()
         self.history_used_spot = False
         self.ccy_combo = None
@@ -453,8 +470,11 @@ class FxThread(ThreadJob):
         self.config.set_key('use_exchange_rate', bool(b))
         self.trigger_update()
 
-    def get_history_config(self, *, default=False):
-        return bool(self.config.get('history_rates', default))
+    def get_history_config(self, *, allow_none=False):
+        val = self.config.get('history_rates', None)
+        if val is None and allow_none:
+            return None
+        return bool(val)
 
     def set_history_config(self, b):
         self.config.set_key('history_rates', bool(b))
@@ -496,19 +516,18 @@ class FxThread(ThreadJob):
         self.logger.info(f"using exchange {name}")
         if self.config_exchange() != name:
             self.config.set_key('use_exchange', name, True)
-        self.exchange = class_(self.on_quotes, self.on_history)
+        assert issubclass(class_, ExchangeBase), f"unexpected type {class_} for {name}"
+        self.exchange = class_(self.on_quotes, self.on_history)  # type: ExchangeBase
         # A new exchange means new fx quotes, initially empty.  Force
         # a quote refresh
         self.trigger_update()
         self.exchange.read_historical_rates(self.ccy, self.cache_dir)
 
     def on_quotes(self):
-        if self.network:
-            self.network.trigger_callback('on_quotes')
+        util.trigger_callback('on_quotes')
 
     def on_history(self):
-        if self.network:
-            self.network.trigger_callback('on_history')
+        util.trigger_callback('on_history')
 
     def exchange_rate(self) -> Decimal:
         """Returns the exchange rate as a Decimal"""
@@ -547,9 +566,11 @@ class FxThread(ThreadJob):
         rate = self.exchange.historical_rate(self.ccy, d_t)
         # Frequently there is no rate for today, until tomorrow :)
         # Use spot quotes in that case
-        if rate == 'NaN' and (datetime.today().date() - d_t.date()).days <= 2:
+        if rate in ('NaN', None) and (datetime.today().date() - d_t.date()).days <= 2:
             rate = self.exchange.quotes.get(self.ccy, 'NaN')
             self.history_used_spot = True
+        if rate is None:
+            rate = 'NaN'
         return Decimal(rate)
 
     def historical_value_str(self, satoshis, d_t):

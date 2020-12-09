@@ -3,10 +3,12 @@ import getpass
 import datetime
 import logging
 
+from electrum_ltc import util
 from electrum_ltc import WalletStorage, Wallet
+from electrum_ltc.wallet_db import WalletDB
 from electrum_ltc.util import format_satoshis
-from electrum_ltc.bitcoin import is_address, COIN, TYPE_ADDRESS
-from electrum_ltc.transaction import TxOutput
+from electrum_ltc.bitcoin import is_address, COIN
+from electrum_ltc.transaction import PartialTxOutput
 from electrum_ltc.network import TxBroadcastError, BestEffortRequestFailed
 from electrum_ltc.logging import console_stderr_handler
 
@@ -29,6 +31,8 @@ class ElectrumGui:
             password = getpass.getpass('Password:', stream=None)
             storage.decrypt(password)
 
+        db = WalletDB(storage.read(), manual_upgrades=False)
+
         self.done = 0
         self.last_balance = ""
 
@@ -39,11 +43,11 @@ class ElectrumGui:
         self.str_amount = ""
         self.str_fee = ""
 
-        self.wallet = Wallet(storage)
+        self.wallet = Wallet(db, storage, config=config)
         self.wallet.start_network(self.network)
         self.contacts = self.wallet.contacts
 
-        self.network.register_callback(self.on_network, ['wallet_updated', 'network_updated', 'banner'])
+        util.register_callback(self.on_network, ['wallet_updated', 'network_updated', 'banner'])
         self.commands = [_("[h] - displays this help text"), \
                          _("[i] - display transaction history"), \
                          _("[o] - enter payment order"), \
@@ -94,9 +98,9 @@ class ElectrumGui:
         + "%d"%(width[2]+delta)+"s"+"%"+"%d"%(width[3]+delta)+"s"
         messages = []
 
-        for tx_hash, tx_mined_status, delta, balance in reversed(self.wallet.get_history()):
-            if tx_mined_status.conf:
-                timestamp = tx_mined_status.timestamp
+        for hist_item in reversed(self.wallet.get_history()):
+            if hist_item.tx_mined_status.conf:
+                timestamp = hist_item.tx_mined_status.timestamp
                 try:
                     time_str = datetime.datetime.fromtimestamp(timestamp).isoformat(' ')[:-3]
                 except Exception:
@@ -104,8 +108,9 @@ class ElectrumGui:
             else:
                 time_str = 'unconfirmed'
 
-            label = self.wallet.get_label(tx_hash)
-            messages.append( format_str%( time_str, label, format_satoshis(delta, whitespaces=True), format_satoshis(balance, whitespaces=True) ) )
+            label = self.wallet.get_label_for_txid(hist_item.txid)
+            messages.append(format_str % (time_str, label, format_satoshis(delta, whitespaces=True),
+                                          format_satoshis(hist_item.balance, whitespaces=True)))
 
         self.print_list(messages[::-1], format_str%( _("Date"), _("Description"), _("Amount"), _("Balance")))
 
@@ -135,7 +140,7 @@ class ElectrumGui:
         self.print_list(messages, "%19s  %25s "%("Key", "Value"))
 
     def print_addresses(self):
-        messages = map(lambda addr: "%30s    %30s       "%(addr, self.wallet.labels.get(addr,"")), self.wallet.get_addresses())
+        messages = map(lambda addr: "%30s    %30s       "%(addr, self.wallet.get_label(addr)), self.wallet.get_addresses())
         self.print_list(messages, "%19s  %25s "%("Address", "Label"))
 
     def print_order(self):
@@ -196,14 +201,15 @@ class ElectrumGui:
             if c == "n": return
 
         try:
-            tx = self.wallet.mktx([TxOutput(TYPE_ADDRESS, self.str_recipient, amount)],
-                                  password, self.config, fee)
+            tx = self.wallet.mktx(outputs=[PartialTxOutput.from_address_and_value(self.str_recipient, amount)],
+                                  password=password,
+                                  fee=fee)
         except Exception as e:
-            print(str(e))
+            print(repr(e))
             return
 
         if self.str_description:
-            self.wallet.labels[tx.txid()] = self.str_description
+            self.wallet.set_label(tx.txid(), self.str_description)
 
         print(_("Please wait..."))
         try:

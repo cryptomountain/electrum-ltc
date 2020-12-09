@@ -36,7 +36,7 @@ Builder.load_string('''
             text: 'Show report contents'
             height: '48dp'
             size_hint: 1, None
-            on_press: root.show_contents()
+            on_release: root.show_contents()
         BoxLayout:
             size_hint: 1, 0.1
         Label:
@@ -119,8 +119,11 @@ class CrashReporter(BaseCrashReporter, Factory.Popup):
         try:
             loop = self.main_window.network.asyncio_loop
             proxy = self.main_window.network.proxy
-            response = json.loads(BaseCrashReporter.send_report(self, loop, proxy, "/crash.json"))
+            # FIXME network request in GUI thread...
+            response = json.loads(BaseCrashReporter.send_report(self, loop, proxy,
+                                                                "/crash.json", timeout=10))
         except (ValueError, ClientError):
+            #self.logger.debug("", exc_info=True)
             self.show_popup(_('Unable to send report'), _("Please check your network connection."))
         else:
             self.show_popup(_('Report sent'), response["text"])

@@ -7,10 +7,10 @@ import shutil
 from io import StringIO
 from electrum_ltc.simple_config import (SimpleConfig, read_user_config)
 
-from . import SequentialTestCase
+from . import ElectrumTestCase
 
 
-class Test_SimpleConfig(SequentialTestCase):
+class Test_SimpleConfig(ElectrumTestCase):
 
     def setUp(self):
         super(Test_SimpleConfig, self).setUp()
@@ -131,6 +131,10 @@ class Test_SimpleConfig(SequentialTestCase):
         self.assertEqual( 2 * 1000, config.depth_target_to_fee(10 ** 6))
         self.assertEqual( 2 * 1000, config.depth_target_to_fee(10 ** 7))
         self.assertEqual( 1 * 1000, config.depth_target_to_fee(10 ** 8))
+        config.mempool_fees = []
+        self.assertEqual(1 * 1000, config.depth_target_to_fee(10 ** 5))
+        config.mempool_fees = None
+        self.assertEqual(None, config.depth_target_to_fee(10 ** 5))
 
     def test_fee_to_depth(self):
         config = SimpleConfig(self.options)
@@ -147,7 +151,7 @@ class Test_SimpleConfig(SequentialTestCase):
         self.assertEqual(36495000, config.fee_to_depth(0.5))
 
 
-class TestUserConfig(SequentialTestCase):
+class TestUserConfig(ElectrumTestCase):
 
     def setUp(self):
         super(TestUserConfig, self).setUp()
